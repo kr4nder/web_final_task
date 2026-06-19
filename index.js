@@ -1,24 +1,53 @@
 const express = require('express');
-const multer = require('multer');
+const Busboy = require('busboy');
 const zlib = require('zlib');
 
 const app = express();
-const upload = multer();
 
-function getFileBuffer(req) {
-  if (req.file?.buffer) {
-    return req.file.buffer;
-  }
+function readRawBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
 
-  if (req.files?.length) {
-    return req.files[0].buffer;
-  }
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
 
-  if (Buffer.isBuffer(req.body) && req.body.length > 0) {
-    return req.body;
-  }
+function readMultipart(req) {
+  return new Promise((resolve, reject) => {
+    const busboy = Busboy({ headers: req.headers });
+    let buffer = null;
 
-  return null;
+    busboy.on('file', (fieldname, file) => {
+      const chunks = [];
+
+      file.on('data', (chunk) => chunks.push(chunk));
+      file.on('end', () => {
+        buffer = Buffer.concat(chunks);
+      });
+    });
+
+    busboy.on('field', (fieldname, value) => {
+      if (fieldname === 'file' && !buffer) {
+        buffer = Buffer.from(value, 'latin1');
+      }
+    });
+
+    busboy.on('finish', () => resolve(buffer));
+    busboy.on('error', reject);
+    req.pipe(busboy);
+  });
+}
+
+function sendGzip(res, buffer) {
+  const gz = zlib.gzipSync(buffer);
+
+  res.set({
+    'Content-Type': 'application/gzip',
+    'Content-Disposition': 'attachment; filename=result.gz',
+  });
+  res.send(gz);
 }
 
 app.get('/login', (req, res) => {
@@ -26,30 +55,22 @@ app.get('/login', (req, res) => {
   res.send('krander');
 });
 
-app.post('/zipper', (req, res, next) => {
-  const contentType = req.headers['content-type'] || '';
-
-  if (contentType.includes('multipart/form-data')) {
-    upload.any()(req, res, next);
-    return;
-  }
-
-  express.raw({ type: () => true, limit: '10mb' })(req, res, next);
-}, (req, res) => {
-  const buffer = getFileBuffer(req);
-
-  if (!buffer) {
-    return res.status(400).type('text/plain').send('No file uploaded');
-  }
-
+app.post('/zipper', async (req, res) => {
   try {
-    const gz = zlib.gzipSync(buffer);
+    const contentType = req.headers['content-type'] || '';
+    let buffer = null;
 
-    res.set({
-      'Content-Type': 'application/gzip',
-      'Content-Disposition': 'attachment; filename=result.gz',
-    });
-    res.send(gz);
+    if (contentType.includes('multipart/form-data')) {
+      buffer = await readMultipart(req);
+    } else {
+      buffer = await readRawBody(req);
+    }
+
+    if (!buffer || buffer.length === 0) {
+      return res.status(400).type('text/plain').send('No file uploaded');
+    }
+
+    sendGzip(res, buffer);
   } catch (error) {
     console.error(error);
     res.status(500).type('text/plain').send('error');
