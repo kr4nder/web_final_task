@@ -5,20 +5,45 @@ const zlib = require('zlib');
 const app = express();
 const upload = multer();
 
+function getFileBuffer(req) {
+  if (req.file?.buffer) {
+    return req.file.buffer;
+  }
+
+  if (req.files?.length) {
+    return req.files[0].buffer;
+  }
+
+  if (Buffer.isBuffer(req.body) && req.body.length > 0) {
+    return req.body;
+  }
+
+  return null;
+}
+
 app.get('/login', (req, res) => {
   res.type('text/plain');
   res.send('krander');
 });
 
-app.post('/zipper', upload.any(), (req, res) => {
-  const file = req.file || (req.files && req.files[0]);
+app.post('/zipper', (req, res, next) => {
+  const contentType = req.headers['content-type'] || '';
 
-  if (!file || !file.buffer) {
+  if (contentType.includes('multipart/form-data')) {
+    upload.any()(req, res, next);
+    return;
+  }
+
+  express.raw({ type: () => true, limit: '10mb' })(req, res, next);
+}, (req, res) => {
+  const buffer = getFileBuffer(req);
+
+  if (!buffer) {
     return res.status(400).type('text/plain').send('No file uploaded');
   }
 
   try {
-    const gz = zlib.gzipSync(file.buffer);
+    const gz = zlib.gzipSync(buffer);
 
     res.set({
       'Content-Type': 'application/gzip',
