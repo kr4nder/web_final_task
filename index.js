@@ -10,9 +10,15 @@ app.get('/login', (req, res) => {
   res.send('krander');
 });
 
-app.post('/zipper', upload.single('file'), (req, res) => {
+app.post('/zipper', upload.any(), (req, res) => {
+  const file = req.file || (req.files && req.files[0]);
+
+  if (!file || !file.buffer) {
+    return res.status(400).type('text/plain').send('No file uploaded');
+  }
+
   try {
-    const gz = zlib.gzipSync(req.file.buffer);
+    const gz = zlib.gzipSync(file.buffer);
 
     res.set({
       'Content-Type': 'application/gzip',
@@ -21,7 +27,7 @@ app.post('/zipper', upload.single('file'), (req, res) => {
     res.send(gz);
   } catch (error) {
     console.error(error);
-    res.status(500).send('error');
+    res.status(500).type('text/plain').send('error');
   }
 });
 
